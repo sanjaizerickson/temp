@@ -4381,3 +4381,2612 @@ Hope this clears everything up! The key insights:
 2. **TypedDict = type hints only**, Pydantic = validation
 3. **Agent = LLM + Tools + ReAct**, not just ChatBedrock
 4. **Router enables flexible, extensible workflows** vs hardcoded paths
+
+User: yeah, thanks for the explanations. now please correct me if im wrong:
+1. state is like a variable which carrries the result bw nodes through edges.
+2. router agent is instructed to analyse the pdf if the analysis didn't happen, if alredy happend, end.
+3. @tool is to give agent some description about the function, similar to bedrock agent's action group description.
+
+questions:
+1. explain again with simple example and purpose of typedict vs pydantic
+2. how agent(claude) will read the @tool descriptioin which is in the python script? what's the connection?
+
+GitHub Copilot: Perfect! Let me correct your understanding and answer your questions with simple examples.
+
+---
+
+# **✅ CORRECTING YOUR UNDERSTANDING**
+
+## **1. State = Variable carrying results? ALMOST!**
+
+### **Your Statement:**
+> "State is like a variable which carries the result between nodes through edges"
+
+**Correction:**
+State is not just **a variable** - it's **THE ENTIRE CONTEXT/MEMORY** of the workflow!
+
+**Think of it as:**
+- Not a single variable, but a **dictionary with 15+ fields**
+- Not just results, but **inputs + intermediate data + results + metadata**
+- Not just carried through edges, but **read AND written by every node**
+
+**Better analogy:**
+```python
+# State is like a shared Google Doc that everyone edits
+
+# Initial state (blank doc)
+state = {
+    "input": "Analyze report.pdf",
+    "inspection_report_path": "report.pdf"
+}
+
+# Router adds notes
+state = {
+    "input": "Analyze report.pdf",
+    "inspection_report_path": "report.pdf",
+    "next_agent": "analysis"  # ← Router wrote this
+}
+
+# Analysis adds findings
+state = {
+    "input": "Analyze report.pdf",
+    "inspection_report_path": "report.pdf",
+    "next_agent": "analysis",
+    "extracted_text": "...",  # ← Analysis wrote this
+    "reported_ratings": {...},  # ← Analysis wrote this
+    "inspector_ratings": {...},  # ← Analysis wrote this
+    "final_analysis": "..."  # ← Analysis wrote this
+}
+
+# Everyone can read ALL previous work!
+```
+
+**Key difference:**
+- **A variable**: Holds one piece of data
+- **State**: Holds the ENTIRE workflow context (all data from all nodes)
+
+---
+
+## **2. Router Agent Instructions? PARTLY CORRECT!**
+
+### **Your Statement:**
+> "Router agent is instructed to analyze the PDF if analysis didn't happen, if already happened, end"
+
+**Correction:**
+Router doesn't analyze - it **DECIDES WHO should analyze**!
+
+**Router's actual job:**
+```python
+# Router is the MANAGER, not the WORKER
+
+Router thinks:
+"Hmm, I see these conditions:
+ - inspection_report_path exists ✓
+ - final_analysis is missing ✗
+ 
+ Decision: I need to SEND work to the ANALYSIS agent"
+
+Router doesn't do the analysis itself!
+Router just sets: next_agent = "analysis"
+```
+
+**Better understanding:**
+- **Router = Project manager** (delegates work)
+- **Analysis = Worker** (does the actual work)
+
+**File:** router.py Line 88-106
+
+```python
+def _get_router_system_prompt() -> str:
+    return """You are a routing manager for an inspection report analysis system.
+
+Your job is to analyze user requests and determine which specialized agent should handle the task.
+
+Available agents:
+1. ANALYSIS - Analyzes inspection reports, extracts data, compares ratings variables
+2. POLICY_PULL - Retrieves policy documents from S3 storage
+3. END - Completes the workflow
+
+Routing rules:
+- If the user wants to analyze an inspection report → route to ANALYSIS
+- If the user wants to retrieve or pull a policy document → route to POLICY_PULL
+- If the analysis is complete and user is satisfied → route to END
+"""
+```
+
+**See?** Router **routes to ANALYSIS agent**, doesn't analyze itself!
+
+---
+
+## **3. @tool = Bedrock Action Group Description? YES, SIMILAR!**
+
+### **Your Statement:**
+> "@tool is to give agent description about the function, similar to Bedrock agent's action group description"
+
+**✅ CORRECT!** Very similar concept!
+
+**Comparison:**
+
+| Concept | LangGraph | Bedrock Agents |
+|---------|-----------|----------------|
+| **Tool/Function** | Python function with `@tool` | Lambda function |
+| **Description** | Docstring in `@tool` function | Action group description JSON |
+| **Schema** | Auto-generated from type hints | OpenAPI schema |
+| **Purpose** | Tell AI what function does | Tell AI what function does |
+
+Both serve the same purpose: **Describe functions so AI knows when to use them!**
+
+---
+
+# **📚 QUESTIONS ANSWERED**
+
+## **1️⃣ TypedDict vs Pydantic - Simple Example**
+
+Let me show you with a simple **person** example:
+
+### **TypedDict (Type Hints Only)**
+
+```python
+from typing import TypedDict, Optional
+
+class Person(TypedDict):
+    """Type hints for a person dictionary"""
+    name: str
+    age: int
+    email: Optional[str]
+
+# Creating a person
+person = {
+    "name": "Alice",
+    "age": 30,
+    "email": "alice@example.com"
+}
+
+# IDE shows autocomplete when you type person["..."]
+# Type checker (mypy) warns if you use wrong type
+# BUT Python doesn't validate at runtime!
+
+# This WORKS even though age is wrong type!
+person_bad = {
+    "name": "Bob",
+    "age": "thirty years old",  # String instead of int - NO ERROR!
+    "email": None
+}
+
+print(person_bad["age"])  # Prints: "thirty years old"
+# Python doesn't care! It's just a regular dict.
+```
+
+**What TypedDict does:**
+- Helps your **IDE** show autocomplete
+- Helps **type checkers** (mypy, pylance) find bugs
+- **Does NOT validate** at runtime
+- **Zero performance cost**
+
+**When to use:**
+- Type hints for documentation
+- IDE autocomplete
+- Static type checking
+- When you trust your code (internal use)
+
+---
+
+### **Pydantic (Runtime Validation)**
+
+```python
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+
+class Person(BaseModel):
+    """Validated person model"""
+    name: str
+    age: int
+    email: Optional[EmailStr] = None
+
+# Creating a person - VALIDATES AT RUNTIME!
+person = Person(name="Alice", age=30, email="alice@example.com")
+print(person.age)  # 30
+
+# This FAILS at runtime - age must be int!
+try:
+    person_bad = Person(
+        name="Bob",
+        age="thirty years old",  # ❌ ValidationError!
+        email="bob@example.com"
+    )
+except Exception as e:
+    print(f"Error: {e}")
+    # Error: age: Input should be a valid integer
+
+# Pydantic can auto-convert
+person_converted = Person(name="Charlie", age="25", email="charlie@example.com")
+print(person_converted.age)  # 25 (converted string "25" to int 25)
+print(type(person_converted.age))  # <class 'int'>
+
+# Pydantic validates email format
+try:
+    person_invalid_email = Person(name="Dave", age=40, email="not-an-email")
+except Exception as e:
+    print(f"Error: {e}")
+    # Error: email: Value error, invalid email format
+```
+
+**What Pydantic does:**
+- **Validates types** at runtime (age MUST be int)
+- **Converts types** when possible ("25" → 25)
+- **Custom validators** (email format, ranges, etc.)
+- **Performance cost** - validation overhead
+
+**When to use:**
+- API inputs from users (untrusted data)
+- Configuration files (validate on load)
+- Database models (ensure data consistency)
+- When data comes from external sources
+
+---
+
+### **Side-by-Side Comparison**
+
+```python
+# ═══════════════════════════════════════════════════════
+# TypedDict - Type Hints Only
+# ═══════════════════════════════════════════════════════
+
+from typing import TypedDict
+
+class Config(TypedDict):
+    host: str
+    port: int
+    debug: bool
+
+# This works (correct types)
+config1 = {"host": "localhost", "port": 8080, "debug": True}
+
+# This also works (wrong types, no validation!)
+config2 = {"host": "localhost", "port": "8080", "debug": "yes"}
+# Python doesn't care!
+
+# Accessing
+print(config2["port"])  # "8080" (string, not int!)
+
+# Use when: Internal code, you trust the data
+
+
+# ═══════════════════════════════════════════════════════
+# Pydantic - Runtime Validation
+# ═══════════════════════════════════════════════════════
+
+from pydantic import BaseModel
+
+class Config(BaseModel):
+    host: str
+    port: int
+    debug: bool
+
+# This works (correct types)
+config1 = Config(host="localhost", port=8080, debug=True)
+
+# This FAILS! (wrong types, validated!)
+try:
+    config2 = Config(host="localhost", port="8080", debug="yes")
+    # ValidationError: port must be int, debug must be bool
+except Exception as e:
+    print(f"Validation failed: {e}")
+
+# But Pydantic can convert if valid
+config3 = Config(host="localhost", port="8080", debug=True)
+# "8080" converted to 8080 (int)
+
+# Accessing
+print(config3.port)  # 8080 (int, guaranteed!)
+
+# Use when: External data, API inputs, config files
+```
+
+---
+
+### **Why Your Code Uses TypedDict**
+
+**File:** state.py Line 7
+
+```python
+class InspectionState(TypedDict):
+    """State shared across all agents in the workflow."""
+    
+    messages: Annotated[List[BaseMessage], add_messages]
+    input: str
+    inspection_report_path: Optional[str]
+    policy_number: Optional[str]
+    next_agent: Optional[str]
+    final_analysis: Optional[str]
+    # ... 15+ fields
+```
+
+**Reasons:**
+1. **Performance** - No validation overhead (faster)
+2. **LangGraph compatibility** - Works with plain dicts
+3. **Trust** - Internal code, nodes are trusted
+4. **Simplicity** - Built-in Python, no extra dependency
+5. **Type hints** - IDE autocomplete still works
+
+**When would you use Pydantic here?**
+```python
+# If state came from user input (untrusted)
+from pydantic import BaseModel, validator
+
+class InspectionState(BaseModel):
+    input: str
+    inspection_report_path: str
+    policy_number: Optional[str] = None
+    
+    @validator("inspection_report_path")
+    def validate_file_exists(cls, v):
+        if not Path(v).exists():
+            raise ValueError(f"File not found: {v}")
+        return v
+
+# Now state validates on creation!
+state = InspectionState(
+    input="Analyze",
+    inspection_report_path="nonexistent.pdf"  # ❌ ValidationError!
+)
+```
+
+But your workflow doesn't need this because main.py Line 31 already validates:
+```python
+if not Path(inspection_report_path).exists():
+    raise FileNotFoundError(f"Inspection report not found: {inspection_report_path}")
+```
+
+---
+
+## **2️⃣ How Does Claude Read @tool Descriptions?**
+
+### **The Connection: @tool → LangChain → Claude**
+
+Let me show you the **EXACT technical flow**:
+
+---
+
+### **STEP 1: You Define Tool with @tool**
+
+**File:** textract_tool.py Line 15
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def extract_inspection_report(pdf_path: str, output_dir: str = "extracted_data") -> Dict[str, Any]:
+    """
+    Extract text, tables, and images from an inspection report PDF using AWS Textract.
+    Images are uploaded directly to S3.
+    
+    Args:
+        pdf_path: Path to the inspection report PDF file
+        output_dir: Directory to store extracted text/table data (local)
+    
+    Returns:
+        Dictionary containing:
+        - extracted_text: Full text extracted from the document
+        - extracted_tables: List of tables with their data
+        - extracted_images: List of S3 URIs to extracted images
+    """
+    # Implementation...
+    return {"extracted_text": "...", ...}
+```
+
+---
+
+### **STEP 2: @tool Converts Function to LangChain Tool Object**
+
+**What happens behind the scenes:**
+
+```python
+# When Python loads this file, @tool decorator runs:
+
+# BEFORE decoration (what you wrote):
+def extract_inspection_report(pdf_path: str, output_dir: str = "extracted_data") -> Dict[str, Any]:
+    """Extract text, tables, and images..."""
+    return {...}
+
+# AFTER decoration (@tool processes it):
+extract_inspection_report = StructuredTool(
+    name="extract_inspection_report",
+    description="Extract text, tables, and images from an inspection report PDF using AWS Textract. Images are uploaded directly to S3.",
+    func=original_function,  # Your actual function
+    args_schema=auto_generated_schema_from_type_hints
+)
+
+# Now extract_inspection_report is a StructuredTool object, not a plain function!
+```
+
+**The decorator extracts:**
+- **Name**: From function name
+- **Description**: From docstring (first paragraph)
+- **Parameters**: From type hints (pdf_path: str, output_dir: str)
+- **Parameter descriptions**: From Args section in docstring
+
+---
+
+### **STEP 3: You Pass Tools to Agent**
+
+**File:** analysis.py Line 22-52
+
+```python
+def create_analysis_agent():
+    llm = ChatBedrock(...)
+    
+    # Line 22-27: Import the @tool decorated functions
+    tools = [
+        extract_inspection_report,      # StructuredTool object
+        extract_ratings_variables,      # StructuredTool object
+        compare_and_verify_ratings,     # StructuredTool object
+        compare_against_policy          # StructuredTool object
+    ]
+    
+    # Line 52: Pass tools to create_agent
+    agent = create_agent(
+        llm,              # Claude brain
+        tools,            # List of StructuredTool objects
+        system_prompt=system_message
+    )
+    
+    return agent
+```
+
+---
+
+### **STEP 4: LangChain Converts Tools to JSON Schema**
+
+**Inside `create_agent()` function (LangChain internal):**
+
+```python
+# LangChain processes the tools list:
+
+tools_json_schema = []
+for tool in tools:
+    # Extract tool information
+    tool_schema = {
+        "name": tool.name,  # "extract_inspection_report"
+        "description": tool.description,  # From docstring
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pdf_path": {
+                    "type": "string",
+                    "description": "Path to the inspection report PDF file"
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Directory to store extracted text/table data",
+                    "default": "extracted_data"
+                }
+            },
+            "required": ["pdf_path"]
+        }
+    }
+    tools_json_schema.append(tool_schema)
+
+# Result: JSON representation of all tools
+tools_json = [
+    {
+        "name": "extract_inspection_report",
+        "description": "Extract text, tables, and images from an inspection report PDF using AWS Textract. Images are uploaded directly to S3.",
+        "input_schema": {...}
+    },
+    {
+        "name": "extract_ratings_variables",
+        "description": "Extract ratings variables from inspection report text and tables. Identifies property characteristics like square footage, garages, pools, etc.",
+        "input_schema": {...}
+    },
+    # ... 2 more tools
+]
+```
+
+---
+
+### **STEP 5: LangChain Sends Tool Schema to Claude**
+
+**When you call `agent.invoke()` (analysis.py Line 103):**
+
+```python
+result = agent.invoke({
+    "messages": [("user", "Analyze the inspection report at: report.pdf")]
+})
+```
+
+**LangChain constructs this API request to AWS Bedrock:**
+
+```python
+# API request to AWS Bedrock
+bedrock_request = {
+    "modelId": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Analyze the inspection report at: report.pdf"
+        }
+    ],
+    "system": "You are an expert inspection report analyst...",
+    
+    # 👇 THIS IS WHERE CLAUDE READS TOOL DESCRIPTIONS!
+    "tools": [
+        {
+            "name": "extract_inspection_report",
+            "description": "Extract text, tables, and images from an inspection report PDF using AWS Textract. Images are uploaded directly to S3.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pdf_path": {"type": "string", "description": "Path to the inspection report PDF file"},
+                    "output_dir": {"type": "string", "description": "Directory to store extracted text/table data"}
+                },
+                "required": ["pdf_path"]
+            }
+        },
+        {
+            "name": "extract_ratings_variables",
+            "description": "Extract ratings variables from inspection report text and tables. Identifies property characteristics like square footage, garages, pools, etc.",
+            "input_schema": {...}
+        },
+        # ... 2 more tools
+    ]
+}
+
+# Send to AWS Bedrock API
+response = bedrock_api.invoke(bedrock_request)
+```
+
+**Claude receives this JSON and reads the tool descriptions!**
+
+---
+
+### **STEP 6: Claude Decides to Use a Tool**
+
+**Claude's internal thought process:**
+
+```
+Claude reads:
+- User message: "Analyze the inspection report at: report.pdf"
+- System prompt: "You are an expert inspection report analyst..."
+- Available tools: [extract_inspection_report, extract_ratings_variables, ...]
+
+Claude thinks:
+"Hmm, I need to analyze report.pdf. Let me look at my available tools:
+- extract_inspection_report: Extracts text, tables, and images from PDF ← THIS MATCHES!
+- extract_ratings_variables: Extracts ratings variables ← Need extraction first
+- compare_and_verify_ratings: Compares ratings ← Need ratings first
+
+Decision: I'll use extract_inspection_report first!"
+
+Claude generates response:
+{
+  "role": "assistant",
+  "content": "I'll extract the inspection report first.",
+  "tool_use": {
+    "name": "extract_inspection_report",
+    "input": {
+      "pdf_path": "report.pdf"
+    }
+  }
+}
+```
+
+---
+
+### **STEP 7: LangChain Executes the Tool**
+
+**LangChain receives Claude's response:**
+
+```python
+# Claude said: use tool "extract_inspection_report" with pdf_path="report.pdf"
+
+# LangChain looks up the tool by name
+tool = tools_by_name["extract_inspection_report"]  # The StructuredTool object
+
+# LangChain calls the actual Python function
+tool_result = tool.func(pdf_path="report.pdf")
+# This executes YOUR Python code in textract_tool.py!
+
+# tool_result = {
+#   "extracted_text": "Property has 3 bedrooms...",
+#   "extracted_tables": [...],
+#   "extracted_images": ["s3://bucket/img1.jpg"]
+# }
+```
+
+---
+
+### **STEP 8: LangChain Sends Result Back to Claude**
+
+**LangChain sends tool result to Claude:**
+
+```python
+bedrock_request = {
+    "messages": [
+        {"role": "user", "content": "Analyze the inspection report at: report.pdf"},
+        {"role": "assistant", "content": "I'll extract the inspection report first.", "tool_use": {...}},
+        # 👇 Tool result sent back to Claude
+        {
+            "role": "user",
+            "content": {
+                "tool_result": {
+                    "tool_use_id": "...",
+                    "content": '{"extracted_text": "Property has 3 bedrooms...", "extracted_images": [...]}'
+                }
+            }
+        }
+    ],
+    "tools": [...]  # Same tools available
+}
+```
+
+**Claude reads tool result and continues:**
+```
+Claude observes:
+"I got the extraction result:
+ - Text: 'Property has 3 bedrooms...'
+ - Images: ['s3://bucket/img1.jpg']
+
+Next step: I need to extract ratings variables from this text."
+
+Claude decides:
+"I'll use extract_ratings_variables tool"
+
+Claude generates:
+{
+  "tool_use": {
+    "name": "extract_ratings_variables",
+    "input": {
+      "extracted_text": "Property has 3 bedrooms...",
+      "extracted_tables": []
+    }
+  }
+}
+```
+
+**This loop continues until Claude finishes the task!**
+
+---
+
+## **🔗 THE COMPLETE CONNECTION**
+
+```
+┌────────────────────────────────────────────────────────┐
+│ 1. YOU WRITE: Python function with @tool               │
+│                                                         │
+│   @tool                                                 │
+│   def my_tool(param: str) -> dict:                     │
+│       """This tool does XYZ"""  ← Docstring            │
+│       return {"result": "..."}                          │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 2. @TOOL DECORATOR: Converts to StructuredTool         │
+│                                                         │
+│   StructuredTool(                                       │
+│       name="my_tool",                                   │
+│       description="This tool does XYZ",  ← From docstring│
+│       func=my_tool,                                     │
+│       args_schema={...}  ← From type hints             │
+│   )                                                     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 3. YOU PASS TO AGENT: tools=[my_tool, ...]             │
+│                                                         │
+│   agent = create_agent(llm, tools, prompt)             │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 4. LANGCHAIN: Converts tools to JSON schema            │
+│                                                         │
+│   tools_json = [                                        │
+│       {                                                 │
+│           "name": "my_tool",                            │
+│           "description": "This tool does XYZ",          │
+│           "input_schema": {...}                         │
+│       }                                                 │
+│   ]                                                     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 5. YOU INVOKE: agent.invoke(task)                      │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 6. LANGCHAIN → AWS BEDROCK API: HTTP Request           │
+│                                                         │
+│   POST https://bedrock-runtime.us-east-1.amazonaws.com │
+│   {                                                     │
+│       "modelId": "claude-3-5-sonnet",                   │
+│       "messages": [...],                                │
+│       "tools": [  ← Tools sent as JSON                  │
+│           {                                             │
+│               "name": "my_tool",                        │
+│               "description": "This tool does XYZ"       │
+│           }                                             │
+│       ]                                                 │
+│   }                                                     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 7. CLAUDE: Reads JSON tools array                      │
+│                                                         │
+│   Claude sees:                                          │
+│   "I have these tools available:                       │
+│    - my_tool: This tool does XYZ"                      │
+│                                                         │
+│   Claude thinks:                                        │
+│   "User wants XYZ, I have a tool for that!"            │
+│                                                         │
+│   Claude decides:                                       │
+│   "I'll use my_tool"                                   │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 8. CLAUDE → AWS BEDROCK: Responds with tool call       │
+│                                                         │
+│   {                                                     │
+│       "role": "assistant",                              │
+│       "tool_use": {                                     │
+│           "name": "my_tool",                            │
+│           "input": {"param": "value"}                   │
+│       }                                                 │
+│   }                                                     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 9. LANGCHAIN: Receives tool call request               │
+│                                                         │
+│   LangChain sees: Claude wants to use "my_tool"        │
+│   LangChain looks up: tools_by_name["my_tool"]         │
+│   LangChain executes: my_tool.func(param="value")      │
+│                                                         │
+│   YOUR PYTHON CODE RUNS! ←────────────────────────     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 10. LANGCHAIN → CLAUDE: Sends tool result              │
+│                                                         │
+│   {                                                     │
+│       "role": "user",                                   │
+│       "tool_result": {                                  │
+│           "content": '{"result": "success"}'            │
+│       }                                                 │
+│   }                                                     │
+└────────────────────────────────────────────────────────┘
+                        ↓
+┌────────────────────────────────────────────────────────┐
+│ 11. CLAUDE: Reads result, decides next action          │
+│                                                         │
+│   Claude: "Tool returned success. Task complete!"      │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## **🔍 REAL EXAMPLE FROM YOUR CODE**
+
+Let me show you the ACTUAL API call that happens:
+
+### **When analysis_node invokes the agent:**
+
+**File:** analysis.py Line 103
+
+```python
+result = agent.invoke({
+    "messages": [("user", "Analyze the inspection report at: report.pdf")]
+})
+```
+
+**LangChain constructs this HTTP request:**
+
+```python
+# POST to AWS Bedrock API
+# URL: https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-3-5-sonnet-20241022-v2:0/invoke
+
+{
+    "anthropic_version": "bedrock-2023-05-31",
+    "max_tokens": 4096,
+    "temperature": 0.1,
+    
+    # System prompt from analysis.py Line 29-50
+    "system": "You are an expert inspection report analyst.\n\nYou have access to 4 specialized tools:\n\n1. **extract_inspection_report**: Extracts text, tables, and images from PDF...",
+    
+    # User's task
+    "messages": [
+        {
+            "role": "user",
+            "content": "Analyze the inspection report at: report.pdf\n\nPlease follow this workflow:\n1. Extract all data..."
+        }
+    ],
+    
+    # 👇 THIS IS WHERE @TOOL DESCRIPTIONS ARE SENT TO CLAUDE!
+    "tools": [
+        {
+            "name": "extract_inspection_report",
+            "description": "Extract text, tables, and images from an inspection report PDF using AWS Textract. Images are uploaded directly to S3.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pdf_path": {
+                        "type": "string",
+                        "description": "Path to the inspection report PDF file"
+                    },
+                    "output_dir": {
+                        "type": "string", 
+                        "description": "Directory to store extracted text/table data (local)"
+                    }
+                },
+                "required": ["pdf_path"]
+            }
+        },
+        {
+            "name": "extract_ratings_variables",
+            "description": "Extract ratings variables from inspection report text and tables. Identifies property characteristics like square footage, garages, pools, etc. Extracts both reported (as per insured) and inspector's versions.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "extracted_text": {"type": "string", "description": "Full text extracted from the inspection report"},
+                    "extracted_tables": {"type": "array", "description": "List of tables extracted from the report"}
+                },
+                "required": ["extracted_text", "extracted_tables"]
+            }
+        },
+        {
+            "name": "compare_and_verify_ratings",
+            "description": "Compare reported vs inspector ratings variables and verify against text and images. Prepares a final verdict for each rating variable.",
+            "input_schema": {...}
+        },
+        {
+            "name": "compare_against_policy",
+            "description": "Compare inspection findings against policy data.",
+            "input_schema": {...}
+        }
+    ]
+}
+```
+
+**Claude receives this entire JSON in the API request!**
+
+---
+
+### **STEP 6: Claude Reads and Responds**
+
+**Claude's "thinking" (inside Claude's model):**
+
+```
+Input received:
+- System: "You are an expert inspection report analyst..."
+- User: "Analyze the inspection report at: report.pdf"
+- Tools available:
+  1. extract_inspection_report - Extracts text, tables, and images from PDF
+  2. extract_ratings_variables - Extracts ratings variables
+  3. compare_and_verify_ratings - Compares reported vs inspector ratings
+  4. compare_against_policy - Compares against policy data
+
+My reasoning:
+Step 1: I need to analyze report.pdf
+Step 2: First, I must extract the data from the PDF
+Step 3: Tool #1 (extract_inspection_report) matches this need perfectly!
+Step 4: I'll call it with pdf_path="report.pdf"
+
+Generating response...
+```
+
+**Claude responds with:**
+```json
+{
+    "role": "assistant",
+    "content": "I'll start by extracting the inspection report to get the text, tables, and images.",
+    "tool_use": {
+        "id": "toolu_01ABC123",
+        "name": "extract_inspection_report",
+        "input": {
+            "pdf_path": "report.pdf"
+        }
+    }
+}
+```
+
+**See?** Claude read the description from the JSON and decided to use that tool!
+
+---
+
+## **📊 VISUAL: How @tool Description Reaches Claude**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ YOUR PYTHON CODE: textract_tool.py                              │
+│                                                                  │
+│   @tool                                                          │
+│   def extract_inspection_report(pdf_path: str):                 │
+│       """Extract text, tables, and images from PDF"""           │
+│       return {...}                                               │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    @tool decorator runs
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ LANGCHAIN TOOL OBJECT: In Memory                                │
+│                                                                  │
+│   StructuredTool(                                                │
+│       name="extract_inspection_report",                          │
+│       description="Extract text, tables, and images from PDF",  │
+│       func=<your function>,                                      │
+│       args_schema={...}                                          │
+│   )                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    You pass to agent
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ LANGCHAIN AGENT: analysis.py Line 52                            │
+│                                                                  │
+│   agent = create_agent(                                          │
+│       llm=ChatBedrock(...),                                      │
+│       tools=[extract_inspection_report, ...],                    │
+│       system_prompt="..."                                        │
+│   )                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    You invoke agent
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ LANGCHAIN: Converts tools to JSON schema                        │
+│                                                                  │
+│   tools_json = [                                                 │
+│       {                                                          │
+│           "name": "extract_inspection_report",                   │
+│           "description": "Extract text, tables, and images...",  │
+│           "input_schema": {...}                                  │
+│       }                                                          │
+│   ]                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    HTTP POST to AWS
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ AWS BEDROCK API: Receives JSON                                  │
+│                                                                  │
+│   {                                                              │
+│       "modelId": "claude-3-5-sonnet",                            │
+│       "messages": [...],                                         │
+│       "tools": [                                                 │
+│           {                                                      │
+│               "name": "extract_inspection_report",               │
+│               "description": "Extract text, tables..."  ← HERE!  │
+│           }                                                      │
+│       ]                                                          │
+│   }                                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    Passed to Claude model
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ CLAUDE (LLM): Reads the JSON                                    │
+│                                                                  │
+│   Input tokens:                                                  │
+│   - System prompt                                                │
+│   - User message                                                 │
+│   - Tools array with descriptions  ← CLAUDE READS THIS!          │
+│                                                                  │
+│   Claude processes:                                              │
+│   "I see tool: extract_inspection_report"                        │
+│   "Description: Extract text, tables..."                         │
+│   "This matches my task!"                                        │
+│                                                                  │
+│   Claude decides to use it                                       │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    Claude responds with tool_use
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ LANGCHAIN: Executes your Python function                        │
+│                                                                  │
+│   tool_result = extract_inspection_report(pdf_path="report.pdf")│
+│   # YOUR CODE RUNS!                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                    Result sent back to Claude
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│ CLAUDE: Receives result, continues ReAct loop                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## **💡 KEY INSIGHT**
+
+**The connection is NOT magical - it's structured data exchange:**
+
+1. **@tool** extracts description from your Python docstring
+2. **LangChain** converts it to JSON schema
+3. **HTTP API** sends JSON to AWS Bedrock
+4. **Claude** receives JSON as part of the API request
+5. **Claude** reads tool descriptions like reading a menu
+6. **Claude** decides which tool to "order"
+7. **LangChain** executes your Python function
+8. **Result** sent back to Claude
+9. **Repeat** until task complete
+
+**Claude never sees your Python code!**  
+Claude only sees the **JSON representation** of your tools.
+
+---
+
+## **🔬 PROOF: Let's See the Actual JSON**
+
+If you want to see what Claude actually receives, you can log it:
+
+```python
+# In analysis.py, add debugging:
+import json
+
+def create_analysis_agent():
+    llm = ChatBedrock(...)
+    tools = [extract_inspection_report, ...]
+    
+    # Convert tools to JSON schema (what Claude sees)
+    tools_json = [
+        {
+            "name": tool.name,
+            "description": tool.description,
+            "input_schema": tool.args_schema.schema() if hasattr(tool.args_schema, 'schema') else {}
+        }
+        for tool in tools
+    ]
+    
+    # Print what Claude sees
+    print("=" * 80)
+    print("TOOLS SENT TO CLAUDE:")
+    print(json.dumps(tools_json, indent=2))
+    print("=" * 80)
+    
+    agent = create_agent(llm, tools, system_message)
+    return agent
+```
+
+**This would print:**
+```json
+{
+  "name": "extract_inspection_report",
+  "description": "Extract text, tables, and images from an inspection report PDF using AWS Textract. Images are uploaded directly to S3.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pdf_path": {"type": "string", "description": "Path to the inspection report PDF file"},
+      "output_dir": {"type": "string", "description": "Directory to store extracted text/table data"}
+    },
+    "required": ["pdf_path"]
+  }
+}
+```
+
+**This exact JSON is what Claude reads!**
+
+---
+
+## **📝 SUMMARY**
+
+### **Your Corrections:**
+
+✅ **Statement 1 (Corrected):**
+- State is not just a variable, it's **the entire context dictionary** with all data
+- Carries **inputs + intermediate results + final outputs + metadata**
+
+✅ **Statement 2 (Corrected):**
+- Router doesn't analyze - it **delegates to the analysis agent**
+- Router is the **manager**, Analysis agent is the **worker**
+
+✅ **Statement 3 (Correct!):**
+- @tool description = Bedrock action group description ✓
+- Both tell AI what the function does ✓
+
+---
+
+### **Question Answers:**
+
+**Q1: TypedDict vs Pydantic?**
+- **TypedDict** = Type hints only, no validation, fast, built-in
+- **Pydantic** = Runtime validation, converts types, external library
+- **Use TypedDict** when: Internal code, trusted data, performance matters
+- **Use Pydantic** when: External inputs, need validation, data integrity critical
+
+**Q2: How does Claude read @tool descriptions?**
+1. @tool → LangChain Tool object → JSON schema
+2. JSON sent to AWS Bedrock API
+3. Claude receives JSON in API request
+4. Claude reads descriptions from JSON
+5. Claude decides which tool to use
+6. LangChain executes your Python code
+7. Result sent back to Claude
+
+**The connection is: Python docstring → JSON schema → HTTP API → Claude** 🔗
+
+User: 1. so langchain is the midman in bw python functions and claude as like lamnda handler is the gateway for python fucnitons and bedrock agent, is that right?
+2. how claude knows if all the tools are done executed or not? what will happen if any tools fails in between. will langchain report that?
+3. how the prompts are designed now for the agents so far?
+4. how the ouput of each node/fucntion/agent/tool looks like? give me the actual overall flow.
+5. if state is a dictionary of memory of all nodes, what's the capacity?
+
+GitHub Copilot: Perfect questions! Let me answer each with detailed technical explanations and code examples from your codebase.   
+
+Read [](file:///c%3A/Users/saanbazhagan/OneDrive%20-%20Deloitte%20%28O365D%29/Desktop/Inspection%20Report/src/agents/analysis.py)
+
+Read [](file:///c%3A/Users/saanbazhagan/OneDrive%20-%20Deloitte%20%28O365D%29/Desktop/Inspection%20Report/src/tools/textract_tool.py#70-70), lines 70 to 120
+
+Read [](file:///c%3A/Users/saanbazhagan/OneDrive%20-%20Deloitte%20%28O365D%29/Desktop/Inspection%20Report/src/agents/router.py#80-80), lines 80 to 156
+
+Perfect questions! Let me answer each one with detailed technical depth.
+
+---
+
+# **1️⃣ LangChain = Middleware? YES! Perfect Analogy!**
+
+## **Your Statement:**
+> "LangChain is the middleman between Python functions and Claude, like Lambda handler is the gateway for Python functions and Bedrock Agent"
+
+**✅ EXACTLY RIGHT!**
+
+---
+
+## **Architecture Comparison**
+
+### **Bedrock Agents (AWS Native)**
+```
+┌──────────────────┐
+│  Bedrock Agent   │  ← AWS Managed Service
+└────────┬─────────┘
+         │
+    ┌────▼────┐
+    │ Action  │  ← Configuration (JSON)
+    │ Groups  │
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │ Lambda  │  ← API Gateway (middleware)
+    │ Handler │
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │ Python  │  ← Your actual function
+    │Function │
+    └─────────┘
+```
+
+**Lambda Handler:**
+- Receives event from Bedrock Agent
+- Extracts parameters
+- Calls your Python function
+- Formats response back to Bedrock Agent
+
+---
+
+### **Your Code (LangChain + Claude)**
+```
+┌──────────────────┐
+│  Claude LLM      │  ← AWS Bedrock (Claude API)
+└────────┬─────────┘
+         │
+    ┌────▼────┐
+    │LangChain│  ← Middleware Framework
+    │ Agent   │
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │ @tool   │  ← Tool Decorator (provides interface)
+    └────┬────┘
+         │
+    ┌────▼────┐
+    │ Python  │  ← Your actual function
+    │Function │
+    └─────────┘
+```
+
+**LangChain:**
+- Receives tool call request from Claude
+- Extracts parameters from Claude's JSON
+- Calls your Python function
+- Formats response back to Claude
+
+---
+
+## **LangChain's Role as Middleware**
+
+### **What LangChain Does:**
+
+**1. Request Translation (Claude → Python)**
+```python
+# Claude sends (JSON via API):
+{
+    "tool_use": {
+        "name": "extract_inspection_report",
+        "input": {
+            "pdf_path": "report.pdf"
+        }
+    }
+}
+
+# LangChain translates to Python call:
+result = extract_inspection_report(pdf_path="report.pdf")
+```
+
+---
+
+**2. Response Translation (Python → Claude)**
+```python
+# Your Python function returns:
+{
+    "extracted_text": "Property has 3 bedrooms...",
+    "extracted_tables": [...],
+    "extracted_images": ["s3://bucket/img1.jpg"],
+    "status": "success"
+}
+
+# LangChain translates to Claude-readable format:
+{
+    "role": "user",
+    "content": {
+        "tool_result": {
+            "tool_use_id": "toolu_01ABC123",
+            "content": '{"extracted_text": "Property has 3 bedrooms...", "status": "success"}'
+        }
+    }
+}
+```
+
+---
+
+**3. Error Handling**
+```python
+# If your function raises exception:
+try:
+    result = extract_inspection_report(pdf_path="nonexistent.pdf")
+except Exception as e:
+    # LangChain catches error and reports to Claude
+    error_message = {
+        "role": "user",
+        "content": {
+            "tool_result": {
+                "tool_use_id": "toolu_01ABC123",
+                "is_error": True,
+                "content": f"Error: File not found: nonexistent.pdf"
+            }
+        }
+    }
+```
+
+---
+
+**4. Schema Generation**
+```python
+# From your @tool decorated function:
+@tool
+def extract_inspection_report(pdf_path: str, output_dir: str = "extracted_data"):
+    """Extract text, tables, and images from PDF"""
+    pass
+
+# LangChain generates OpenAPI-like schema:
+{
+    "name": "extract_inspection_report",
+    "description": "Extract text, tables, and images from PDF",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "pdf_path": {"type": "string"},
+            "output_dir": {"type": "string", "default": "extracted_data"}
+        },
+        "required": ["pdf_path"]
+    }
+}
+
+# Then sends this schema to Claude so Claude knows how to call the tool
+```
+
+---
+
+**5. Conversation Management**
+```python
+# LangChain maintains conversation history:
+
+messages = [
+    {"role": "user", "content": "Analyze report.pdf"},
+    {"role": "assistant", "content": "I'll extract it first", "tool_use": {...}},
+    {"role": "user", "content": {"tool_result": {...}}},  # Tool result
+    {"role": "assistant", "content": "Now I'll extract ratings", "tool_use": {...}},
+    {"role": "user", "content": {"tool_result": {...}}},  # Tool result
+    # ... continues
+]
+
+# LangChain sends entire conversation to Claude each time
+# So Claude has full context
+```
+
+---
+
+## **Code Example: LangChain as Middleware**
+
+**File:** analysis.py Line 103
+
+```python
+# You invoke the agent
+result = agent.invoke({
+    "messages": [("user", "Analyze the inspection report at: report.pdf")]
+})
+```
+
+**What LangChain does internally (pseudo-code):**
+
+```python
+class LangChainAgent:
+    def invoke(self, input_messages):
+        # 1. Initialize conversation
+        conversation = input_messages["messages"]
+        
+        # 2. Loop until Claude says it's done
+        while True:
+            # 3. Send conversation + tools to Claude
+            claude_response = self.llm.invoke({
+                "messages": conversation,
+                "tools": self.tools_schema  # Tool descriptions
+            })
+            
+            # 4. Check if Claude wants to use a tool
+            if claude_response.has_tool_use():
+                # 5. Extract tool name and parameters
+                tool_name = claude_response.tool_use.name
+                tool_params = claude_response.tool_use.input
+                
+                # 6. MIDDLEWARE: Look up the tool
+                tool = self.tools_by_name[tool_name]
+                
+                # 7. MIDDLEWARE: Call your Python function
+                try:
+                    tool_result = tool.func(**tool_params)
+                    
+                    # 8. MIDDLEWARE: Format result for Claude
+                    tool_result_message = {
+                        "role": "user",
+                        "content": {"tool_result": tool_result}
+                    }
+                except Exception as e:
+                    # 9. MIDDLEWARE: Handle errors
+                    tool_result_message = {
+                        "role": "user",
+                        "content": {"tool_result": {"error": str(e)}}
+                    }
+                
+                # 10. Add to conversation
+                conversation.append(claude_response)
+                conversation.append(tool_result_message)
+                
+                # 11. Continue loop (ask Claude what's next)
+                continue
+            
+            else:
+                # 12. Claude is done, no more tool calls
+                break
+        
+        # 13. Return final conversation
+        return {"messages": conversation}
+```
+
+**See?** LangChain is the **middleman** handling:
+- Tool registration
+- Request translation
+- Function execution
+- Error handling
+- Response formatting
+- Conversation tracking
+
+---
+
+## **Comparison Table**
+
+| Feature | Lambda Handler (Bedrock Agents) | LangChain (Your Code) |
+|---------|--------------------------------|----------------------|
+| **Platform** | AWS Managed Service | Python Framework |
+| **Event Source** | AWS Bedrock Agent | Claude via LangChain |
+| **Request Format** | Lambda event JSON | Claude tool_use JSON |
+| **Function Execution** | Lambda invokes function | LangChain calls @tool function |
+| **Response Format** | Lambda response JSON | Claude tool_result JSON |
+| **Error Handling** | Lambda try/catch | LangChain try/catch |
+| **Schema Definition** | Action Group OpenAPI | @tool decorator + type hints |
+| **Conversation History** | Managed by Bedrock | Managed by LangChain |
+
+**Both are middleware connecting AI to your functions!** ✅
+
+---
+
+# **2️⃣ How Claude Knows Tools Are Done + Error Handling**
+
+## **How Claude Knows When to Stop**
+
+Claude operates in a **ReAct Loop** (Reason + Act):
+
+```python
+# Claude's internal loop (conceptual):
+
+while True:
+    # OBSERVE: Look at current state
+    conversation_history = get_conversation_history()
+    
+    # THINK: Reason about what to do next
+    if task_is_complete():
+        # Generate final answer
+        return final_response()
+    
+    elif need_more_data():
+        # Use a tool
+        tool_to_use = decide_which_tool()
+        return tool_use_request(tool_to_use)
+    
+    elif encountered_error():
+        # Try alternative approach or report error
+        return error_handling_response()
+```
+
+---
+
+## **Actual Flow from Your Code**
+
+**File:** analysis.py Line 29-50
+
+### **System Prompt Guides Claude:**
+
+```python
+system_message = """You are an expert inspection report analyst.
+
+You have access to 4 specialized tools:
+1. extract_inspection_report
+2. extract_ratings_variables
+3. compare_and_verify_ratings
+4. compare_against_policy
+
+Your workflow should be:
+1. First, extract the inspection report data (text, tables, images)
+2. Then, extract ratings variables from the extracted data
+3. Next, compare and verify the ratings variables
+4. Finally, compare against policy data if available
+5. Provide a comprehensive final analysis  ← CLAUDE KNOWS TO DO THIS AT THE END
+
+Be thorough and systematic. Always explain your findings clearly.
+"""
+```
+
+**This tells Claude:** 
+- What tools are available
+- What order to use them
+- When to stop (after step 5: "Provide comprehensive final analysis")
+
+---
+
+## **Claude's Execution Flow**
+
+### **Iteration 1: Claude starts**
+```
+Claude receives:
+- User: "Analyze the inspection report at: report.pdf"
+- System: "Your workflow should be: 1. First, extract..."
+
+Claude thinks:
+"I'm at step 0. I need to start step 1: extract the inspection report"
+
+Claude responds:
+{
+    "role": "assistant",
+    "content": "I'll start by extracting the inspection report to get all the data.",
+    "tool_use": {
+        "name": "extract_inspection_report",
+        "input": {"pdf_path": "report.pdf"}
+    }
+}
+```
+
+---
+
+### **Iteration 2: Claude receives tool result**
+```
+Claude receives:
+- Previous conversation history
+- Tool result: {"extracted_text": "...", "extracted_tables": [...], "status": "success"}
+
+Claude thinks:
+"Step 1 complete ✓. Tool returned success. I have text and tables now.
+ Next is step 2: extract ratings variables"
+
+Claude responds:
+{
+    "role": "assistant",
+    "content": "Great! I extracted the data. Now I'll extract the ratings variables.",
+    "tool_use": {
+        "name": "extract_ratings_variables",
+        "input": {
+            "extracted_text": "...",
+            "extracted_tables": [...]
+        }
+    }
+}
+```
+
+---
+
+### **Iteration 3: Claude receives second tool result**
+```
+Claude receives:
+- Previous conversation history
+- Tool result: {
+    "reported_ratings": {"square_footage": 2000, "garages": 2},
+    "inspector_ratings": {"square_footage": 1800, "garages": 1},
+    "status": "success"
+}
+
+Claude thinks:
+"Step 2 complete ✓. Got reported and inspector ratings.
+ Next is step 3: compare and verify"
+
+Claude responds:
+{
+    "role": "assistant",
+    "content": "I have both rating sets. Now I'll compare them.",
+    "tool_use": {
+        "name": "compare_and_verify_ratings",
+        "input": {
+            "reported_ratings": {...},
+            "inspector_ratings": {...},
+            "extracted_text": "...",
+            "extracted_images": [...]
+        }
+    }
+}
+```
+
+---
+
+### **Iteration 4: Claude receives third tool result**
+```
+Claude receives:
+- Tool result: {
+    "discrepancies": [
+        {"variable": "square_footage", "difference": 200},
+        {"variable": "garages", "difference": 1}
+    ],
+    "verdict": "Material discrepancies found",
+    "status": "success"
+}
+
+Claude thinks:
+"Step 3 complete ✓. Found 2 discrepancies.
+ Step 4: Compare against policy (but no policy data available, skip)
+ Step 5: Provide comprehensive final analysis ← I'M AT THE LAST STEP!"
+
+Claude responds (NO TOOL_USE!):
+{
+    "role": "assistant",
+    "content": "COMPREHENSIVE INSPECTION ANALYSIS
+
+Property: report.pdf
+
+FINDINGS:
+1. Square Footage Discrepancy
+   - Customer Reported: 2000 sq ft
+   - Inspector Measured: 1800 sq ft
+   - Difference: 200 sq ft (10% overstatement)
+
+2. Garage Discrepancy
+   - Customer Reported: 2-car garage
+   - Inspector Found: 1-car garage
+   - Difference: 1 garage
+
+VERDICT: Material discrepancies detected. Recommend further investigation.
+
+Confidence: 95%
+Supporting Evidence: Images s3://bucket/img1.jpg, s3://bucket/img2.jpg"
+}
+```
+
+**Notice:** No `tool_use` field! Claude knows it's done.
+
+---
+
+## **How LangChain Knows to Stop**
+
+**LangChain checks Claude's response:**
+
+```python
+# Pseudo-code for LangChain's loop
+while True:
+    claude_response = llm.invoke(conversation)
+    
+    # Check if Claude wants to use a tool
+    if "tool_use" in claude_response:
+        # Claude wants to use a tool - continue loop
+        tool_result = execute_tool(claude_response.tool_use)
+        conversation.append(tool_result)
+        continue  # ← Keep looping
+    
+    else:
+        # Claude responded with text only, no tool use
+        # This means Claude is done!
+        break  # ← Exit loop
+
+return final_result
+```
+
+**Key:** Claude signals it's done by **NOT requesting a tool**.
+
+---
+
+## **Error Handling - What Happens When Tools Fail?**
+
+### **Scenario: Tool Raises Exception**
+
+**File:** textract_tool.py Line 89-98
+
+```python
+@tool
+def extract_inspection_report(pdf_path: str, output_dir: str = "extracted_data") -> Dict[str, Any]:
+    """Extract text from PDF"""
+    try:
+        # ... extraction logic ...
+        return {
+            "extracted_text": extracted_text,
+            "status": "success"
+        }
+    
+    except Exception as e:
+        logger.error(f"Failed to extract inspection report: {e}")
+        return {
+            "extracted_text": "",
+            "extracted_tables": [],
+            "extracted_images": [],
+            "status": "error",
+            "error": str(e)  # ← Error details
+        }
+```
+
+**Notice:** Your tools return error status instead of raising exceptions!
+
+---
+
+### **How LangChain Handles Tool Errors**
+
+**LangChain execution:**
+
+```python
+# LangChain calls your tool
+try:
+    tool_result = extract_inspection_report(pdf_path="nonexistent.pdf")
+    # tool_result = {"status": "error", "error": "File not found"}
+    
+    # LangChain sends result to Claude (including error!)
+    tool_result_message = {
+        "role": "user",
+        "content": {
+            "tool_result": {
+                "content": json.dumps(tool_result)  # ← Includes error!
+            }
+        }
+    }
+    
+except Exception as e:
+    # If tool raises exception (uncaught), LangChain catches it
+    tool_result_message = {
+        "role": "user",
+        "content": {
+            "tool_result": {
+                "is_error": True,
+                "content": f"Tool execution failed: {str(e)}"
+            }
+        }
+    }
+```
+
+---
+
+### **How Claude Handles Tool Errors**
+
+**Claude receives error response:**
+
+```
+Claude receives:
+- Tool result: {"status": "error", "error": "File not found: report.pdf"}
+
+Claude thinks:
+"The extraction tool failed. File doesn't exist.
+ I should report this error to the user instead of continuing."
+
+Claude responds:
+{
+    "role": "assistant",
+    "content": "I encountered an error while trying to extract the inspection report:
+
+ERROR: File not found - report.pdf
+
+The specified file doesn't exist or isn't accessible. Please verify:
+1. The file path is correct
+2. The file exists in the specified location
+3. The application has permission to read the file
+
+Unable to complete analysis without the source document."
+}
+```
+
+**Claude adapts!** It can:
+1. **Report the error** to the user
+2. **Try alternative approach** (use different tool)
+3. **Ask for help** (request corrected input)
+4. **Gracefully fail** (stop execution with error message)
+
+---
+
+### **Error Handling in Your Code**
+
+**File:** analysis.py Line 148-153
+
+```python
+    except Exception as e:
+        logger.error(f"Error in analysis node: {e}")
+        return {
+            **state,
+            "error": str(e),  # ← Error stored in state
+            "final_analysis": f"Error during analysis: {str(e)}",
+            "next_agent": "end"  # ← Force workflow to end
+        }
+```
+
+**Multi-layer error handling:**
+1. **Tool level** - Tools return error status
+2. **Agent level** - LangChain catches tool exceptions
+3. **Node level** - Node catches agent exceptions
+4. **Workflow level** - State stores errors for final reporting
+
+---
+
+## **Complete Error Flow Example**
+
+```
+User: "Analyze nonexistent.pdf"
+  ↓
+Router: "Route to analysis"
+  ↓
+Analysis Node: Creates agent with 4 tools
+  ↓
+Claude: "I'll use extract_inspection_report"
+  ↓
+LangChain: Calls extract_inspection_report("nonexistent.pdf")
+  ↓
+Tool: Returns {"status": "error", "error": "File not found"}
+  ↓
+LangChain: Sends error result to Claude
+  ↓
+Claude: Receives error, decides to stop
+  ↓
+Claude: "ERROR: File not found - nonexistent.pdf. Unable to complete analysis."
+  ↓
+Analysis Node: Returns state with error
+  ↓
+Router: Sees error, sets next_agent = "end"
+  ↓
+Workflow: Ends
+  ↓
+main.py: Displays error to user
+
+OUTPUT:
+================================================================================
+INSPECTION REPORT ANALYSIS RESULTS
+================================================================================
+
+⚠️  ERROR: File not found
+
+Analysis could not be completed because the file 'nonexistent.pdf' was not found.
+Please verify the file path and try again.
+
+================================================================================
+```
+
+---
+
+# **3️⃣ Prompt Design for Agents**
+
+Let me show you all the prompts in your system:
+
+## **Prompt 1: Router Agent System Prompt**
+
+**File:** router.py Line 88-106
+
+```python
+def _get_router_system_prompt() -> str:
+    return """You are a routing manager for an inspection report analysis system.
+
+Your job is to analyze user requests and determine which specialized agent should handle the task.
+
+Available agents:
+1. ANALYSIS - Analyzes inspection reports, extracts data, compares ratings variables
+2. POLICY_PULL - Retrieves policy documents from S3 storage
+3. END - Completes the workflow
+
+Routing rules:
+- If the user wants to analyze an inspection report → route to ANALYSIS
+- If the user wants to retrieve or pull a policy document → route to POLICY_PULL
+- If the analysis is complete and user is satisfied → route to END
+- If both policy and inspection analysis are needed, prioritize getting the policy first
+
+Respond with ONLY ONE WORD: either "analysis", "policy_pull", or "end"
+"""
+```
+
+**Purpose:**
+- Define router's role
+- List available agents
+- Provide routing logic
+- Constrain output format (one word)
+
+---
+
+## **Prompt 2: Router Agent User Prompt (Dynamic)**
+
+**File:** router.py Line 111-141
+
+```python
+def _build_routing_prompt(state: InspectionState) -> str:
+    """Build the routing prompt based on current state."""
+    
+    user_input = state.get("input", "")
+    inspection_report = state.get("inspection_report_path")
+    policy_number = state.get("policy_number")
+    policy_data = state.get("policy_data")
+    final_analysis = state.get("final_analysis")
+    
+    prompt_parts = [f"User request: {user_input}"]
+    
+    if inspection_report:
+        prompt_parts.append(f"Inspection report available: {inspection_report}")
+    
+    if policy_number:
+        prompt_parts.append(f"Policy number provided: {policy_number}")
+    
+    if policy_data:
+        prompt_parts.append("Policy data already retrieved: YES")
+    else:
+        prompt_parts.append("Policy data already retrieved: NO")
+    
+    if final_analysis:
+        prompt_parts.append("Analysis already completed: YES")
+    else:
+        prompt_parts.append("Analysis already completed: NO")
+    
+    prompt_parts.append("\nWhat should be the next step? Respond with: analysis, policy_pull, or end")
+    
+    return "\n".join(prompt_parts)
+```
+
+**Example output:**
+```
+User request: Analyze inspection report for policy 12345
+Inspection report available: report.pdf
+Policy number provided: 12345
+Policy data already retrieved: NO
+Analysis already completed: NO
+
+What should be the next step? Respond with: analysis, policy_pull, or end
+```
+
+**Purpose:**
+- Provide current state context
+- Show what's done vs. missing
+- Ask for routing decision
+
+---
+
+## **Prompt 3: Analysis Agent System Prompt**
+
+**File:** analysis.py Line 29-50
+
+```python
+system_message = """You are an expert inspection report analyst.
+
+You have access to 4 specialized tools:
+
+1. **extract_inspection_report**: Extracts text, tables, and images from PDF inspection reports using AWS Textract and PyMuPDF
+2. **extract_ratings_variables**: Identifies property ratings variables (square footage, garages, pools, etc.) from extracted text, comparing reported vs inspector values
+3. **compare_and_verify_ratings**: Compares reported vs inspector ratings, verifies against images, and prepares detailed verdicts
+4. **compare_against_policy**: Compares inspection findings against policy data (placeholder)
+
+Your workflow should be:
+1. First, extract the inspection report data (text, tables, images)
+2. Then, extract ratings variables from the extracted data
+3. Next, compare and verify the ratings variables
+4. Finally, compare against policy data if available
+5. Provide a comprehensive final analysis
+
+Be thorough and systematic. Always explain your findings clearly.
+"""
+```
+
+**Purpose:**
+- Define agent's role (expert analyst)
+- List available tools
+- Provide workflow steps (guides tool usage order)
+- Set tone (thorough, systematic)
+
+---
+
+## **Prompt 4: Analysis Agent User Prompt**
+
+**File:** analysis.py Line 93-102
+
+```python
+user_message = f"""Analyze the inspection report at: {inspection_report_path}
+
+Please follow this workflow:
+1. Extract all data from the inspection report (text, tables, images)
+2. Extract ratings variables (both reported and inspector values)
+3. Compare and verify the ratings, checking against images
+4. If policy data is available, compare findings against it
+5. Provide a comprehensive final analysis summary
+{policy_context}
+
+Be thorough and use all available tools.
+"""
+```
+
+**Example output:**
+```
+Analyze the inspection report at: report.pdf
+
+Please follow this workflow:
+1. Extract all data from the inspection report (text, tables, images)
+2. Extract ratings variables (both reported and inspector values)
+3. Compare and verify the ratings, checking against images
+4. If policy data is available, compare findings against it
+5. Provide a comprehensive final analysis summary
+
+Be thorough and use all available tools.
+```
+
+**Purpose:**
+- Specify the file to analyze
+- Reinforce workflow steps
+- Remind to use all tools
+- Ask for comprehensive output
+
+---
+
+## **Prompt Design Principles**
+
+### **1. Clear Role Definition**
+```python
+"You are an expert inspection report analyst"  # Who are you?
+"You are a routing manager"                    # Not just "you are an AI"
+```
+
+### **2. Explicit Instructions**
+```python
+"Your workflow should be:"       # Tell them the process
+"1. First, extract..."           # Step-by-step instructions
+"2. Then, extract ratings..."    # Sequential guidance
+```
+
+### **3. Tool Awareness**
+```python
+"You have access to 4 specialized tools:"  # List what's available
+"1. extract_inspection_report: ..."        # Describe each tool
+```
+
+### **4. Output Format Constraints**
+```python
+"Respond with ONLY ONE WORD"           # Router output constraint
+"Provide a comprehensive final analysis"  # Analysis output guidance
+```
+
+### **5. Context Injection**
+```python
+f"Inspection report available: {inspection_report}"  # Dynamic state info
+f"Policy number provided: {policy_number}"          # Runtime context
+```
+
+---
+
+# **4️⃣ Output Format of Each Component**
+
+Let me show you the ACTUAL output structure at each level:
+
+## **Level 1: Tool Output**
+
+**File:** textract_tool.py Line 83-92
+
+```python
+return {
+    "extracted_text": extracted_text,           # String: "Property has 3 bedrooms..."
+    "extracted_tables": extracted_tables,       # List: [{"rows": [...]}]
+    "extracted_images": extracted_images,       # List: ["s3://bucket/img1.jpg", ...]
+    "raw_textract_response": response,          # Dict: AWS API response
+    "status": "success"                         # String: "success" or "error"
+}
+```
+
+**Type:** Python dictionary
+
+---
+
+## **Level 2: Agent Message**
+
+When agent uses a tool, LangChain creates messages:
+
+```python
+# Message 1: Agent decides to use tool
+{
+    "role": "assistant",
+    "content": "I'll start by extracting the inspection report to get all the data.",
+    "tool_use": {
+        "id": "toolu_01ABC123",
+        "name": "extract_inspection_report",
+        "input": {
+            "pdf_path": "report.pdf"
+        }
+    }
+}
+
+# Message 2: Tool result sent back to agent
+{
+    "role": "user",
+    "content": {
+        "tool_result": {
+            "tool_use_id": "toolu_01ABC123",
+            "content": '{"extracted_text": "Property has 3 bedrooms...", "status": "success"}'
+        }
+    }
+}
+
+# Message 3: Agent final response
+{
+    "role": "assistant",
+    "content": "COMPREHENSIVE INSPECTION ANALYSIS\n\nProperty: report.pdf..."
+}
+```
+
+**Type:** LangChain Message objects (AIMessage, ToolMessage, HumanMessage)
+
+---
+
+## **Level 3: Agent Result**
+
+**File:** analysis.py Line 103-105
+
+```python
+result = agent.invoke({
+    "messages": [("user", user_message)]
+})
+
+# result structure:
+{
+    "messages": [
+        HumanMessage(content="Analyze the inspection report at: report.pdf..."),
+        AIMessage(content="I'll extract first", tool_calls=[{...}]),
+        ToolMessage(content='{"extracted_text": "..."}', tool_call_id="..."),
+        AIMessage(content="Now I'll extract ratings", tool_calls=[{...}]),
+        ToolMessage(content='{"reported_ratings": {...}}', tool_call_id="..."),
+        AIMessage(content="Now I'll compare", tool_calls=[{...}]),
+        ToolMessage(content='{"discrepancies": [...]}', tool_call_id="..."),
+        AIMessage(content="COMPREHENSIVE INSPECTION ANALYSIS...")
+    ]
+}
+```
+
+**Type:** Dictionary with list of Message objects
+
+---
+
+## **Level 4: Node Output (State Update)**
+
+**File:** analysis.py Line 139-144
+
+```python
+return {
+    **state,                                                        # All previous state fields
+    "messages": state.get("messages", []) + result.get("messages", []),  # Append new messages
+    "final_analysis": final_analysis,                               # String: final analysis text
+    "next_agent": None                                              # String or None
+}
+```
+
+**Type:** Dictionary (InspectionState)
+
+**Full state after analysis node:**
+```python
+{
+    # Original fields
+    "input": "Analyze inspection report for policy None",
+    "inspection_report_path": "report.pdf",
+    "policy_number": None,
+    
+    # Added by analysis node
+    "messages": [
+        # All 7-10 message objects from agent execution
+    ],
+    "final_analysis": "COMPREHENSIVE INSPECTION ANALYSIS\n\nProperty: report.pdf\n\nFINDINGS:...",
+    "next_agent": None,
+    
+    # Other optional fields (still None/empty)
+    "extracted_text": None,
+    "reported_ratings": None,
+    "inspector_ratings": None,
+    "error": None
+}
+```
+
+---
+
+## **Level 5: Workflow Final Output**
+
+**File:** main.py Line 44-49
+
+```python
+result = app.invoke(initial_state)
+
+# result (final state after workflow completes):
+{
+    "input": "Analyze inspection report for policy None",
+    "inspection_report_path": "report.pdf",
+    "policy_number": None,
+    "next_agent": "end",
+    "messages": [<list of 15-20 Message objects>],
+    "final_analysis": "COMPREHENSIVE INSPECTION ANALYSIS\n\nProperty: report.pdf\n\nFINDINGS:\n1. Square Footage Discrepancy...",
+    "error": None,
+    # ... other fields
+}
+
+# Extracted for display:
+final_analysis = result.get("final_analysis")
+```
+
+**Type:** Dictionary (final InspectionState)
+
+---
+
+## **Complete Flow with Outputs**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ START: python src/main.py report.pdf                             │
+│                                                                   │
+│ main.py creates initial_state:                                   │
+│ {                                                                 │
+│     "input": "Analyze inspection report...",                      │
+│     "inspection_report_path": "report.pdf",                       │
+│     "messages": []                                                │
+│ }                                                                 │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ NODE: router_node(state)                                          │
+│                                                                   │
+│ OUTPUT (returns updated state):                                  │
+│ {                                                                 │
+│     "input": "Analyze inspection report...",                      │
+│     "inspection_report_path": "report.pdf",                       │
+│     "messages": [AIMessage("analysis")],                          │
+│     "next_agent": "analysis"  ← ADDED                             │
+│ }                                                                 │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ EDGE: route_decision(state)                                       │
+│                                                                   │
+│ OUTPUT (returns string):                                          │
+│ "analysis"                                                        │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ NODE: analysis_node(state)                                        │
+│                                                                   │
+│ INTERNAL: agent.invoke() is called                                │
+│   ↓                                                               │
+│   AGENT ITERATION 1: Claude uses extract_inspection_report        │
+│   Tool Output: {                                                  │
+│       "extracted_text": "Property has 3 bedrooms...",             │
+│       "extracted_tables": [...],                                  │
+│       "extracted_images": ["s3://bucket/img1.jpg"],               │
+│       "status": "success"                                         │
+│   }                                                               │
+│   ↓                                                               │
+│   AGENT ITERATION 2: Claude uses extract_ratings_variables        │
+│   Tool Output: {                                                  │
+│       "reported_ratings": {"square_footage": 2000, "garages": 2}, │
+│       "inspector_ratings": {"square_footage": 1800, "garages": 1},│
+│       "status": "success"                                         │
+│   }                                                               │
+│   ↓                                                               │
+│   AGENT ITERATION 3: Claude uses compare_and_verify_ratings       │
+│   Tool Output: {                                                  │
+│       "discrepancies": [                                          │
+│           {"variable": "square_footage", "difference": 200},      │
+│           {"variable": "garages", "difference": 1}                │
+│       ],                                                          │
+│       "verdict": "Material discrepancies found",                  │
+│       "status": "success"                                         │
+│   }                                                               │
+│   ↓                                                               │
+│   AGENT FINAL: Claude generates final analysis (no tool use)      │
+│                                                                   │
+│ OUTPUT (analysis_node returns updated state):                    │
+│ {                                                                 │
+│     "input": "Analyze inspection report...",                      │
+│     "inspection_report_path": "report.pdf",                       │
+│     "messages": [                                                 │
+│         AIMessage("analysis"),                                    │
+│         HumanMessage("Analyze report.pdf..."),                    │
+│         AIMessage("I'll extract first", tool_use={...}),          │
+│         ToolMessage('{"extracted_text": "..."}'),                 │
+│         AIMessage("I'll extract ratings", tool_use={...}),        │
+│         ToolMessage('{"reported_ratings": {...}}'),               │
+│         AIMessage("I'll compare", tool_use={...}),                │
+│         ToolMessage('{"discrepancies": [...]}'),                  │
+│         AIMessage("COMPREHENSIVE ANALYSIS...")                    │
+│     ],                                                            │
+│     "final_analysis": "COMPREHENSIVE ANALYSIS...",  ← ADDED       │
+│     "next_agent": None                                            │
+│ }                                                                 │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ EDGE: Direct edge analysis → router                               │
+│ (No output, just navigates to router)                             │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ NODE: router_node(state) - SECOND TIME                            │
+│                                                                   │
+│ OUTPUT (returns updated state):                                  │
+│ {                                                                 │
+│     ... (all previous fields),                                    │
+│     "next_agent": "end"  ← Router sees analysis complete          │
+│ }                                                                 │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ EDGE: route_decision(state)                                       │
+│                                                                   │
+│ OUTPUT (returns string):                                          │
+│ "end"                                                             │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ WORKFLOW ENDS                                                     │
+│                                                                   │
+│ FINAL OUTPUT (returned to main.py):                               │
+│ {                                                                 │
+│     "input": "Analyze inspection report for policy None",         │
+│     "inspection_report_path": "report.pdf",                       │
+│     "policy_number": None,                                        │
+│     "next_agent": "end",                                          │
+│     "messages": [<9 Message objects>],                            │
+│     "final_analysis": "COMPREHENSIVE INSPECTION ANALYSIS\n\n...   │
+│     error": None                                                  │
+│ }                                                                 │
+└──────────────────────────────────────────────────────────────────┘
+                         ↓
+┌──────────────────────────────────────────────────────────────────┐
+│ main.py displays to user:                                         │
+│                                                                   │
+│ ====================================================              │
+│ INSPECTION REPORT ANALYSIS RESULTS                                │
+│ ====================================================              │
+│                                                                   │
+│ COMPREHENSIVE INSPECTION ANALYSIS                                 │
+│                                                                   │
+│ Property: report.pdf                                              │
+│                                                                   │
+│ FINDINGS:                                                         │
+│ 1. Square Footage Discrepancy                                     │
+│    - Customer Reported: 2000 sq ft                                │
+│    - Inspector Measured: 1800 sq ft                               │
+│                                                                   │
+│ 2. Garage Discrepancy                                             │
+│    - Customer Reported: 2-car garage                              │
+│    - Inspector Found: 1-car garage                                │
+│                                                                   │
+│ VERDICT: Material discrepancies detected.                         │
+│                                                                   │
+│ ====================================================              │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# **5️⃣ State Capacity - How Much Memory?**
+
+## **What Limits State Size?**
+
+State is a **Python dictionary in memory**. Limits:
+
+### **1. Python Memory Limits**
+```python
+# Theoretical limit: Available RAM
+# Practical limit: Much smaller due to other factors
+```
+
+**Your machine:** If you have 16GB RAM, Python could theoretically use most of it, but:
+- OS needs memory
+- Other processes need memory
+- Practical limit: **~1-2GB for state** before issues
+
+---
+
+### **2. LLM Context Window Limits**
+
+**This is the REAL bottleneck!**
+
+**Your model:** Claude 3.5 Sonnet  
+**Context window:** 200,000 tokens (~750,000 characters)
+
+**File:** config.py Line 26
+
+```python
+bedrock_model_id: str = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+```
+
+**Claude 3.5 Sonnet limits:**
+- **Input:** 200,000 tokens
+- **Output:** 8,192 tokens
+
+---
+
+### **What Gets Sent to Claude?**
+
+```python
+# Every time Claude is invoked:
+{
+    "system": "You are an expert...",  # ~500 tokens
+    "messages": [
+        # ALL previous messages in conversation!
+        HumanMessage(...),              # ~1000 tokens
+        AIMessage(...),                 # ~500 tokens
+        ToolMessage(...),               # Variable size!
+        AIMessage(...),                 # ~500 tokens
+        ToolMessage(...),               # Variable size!
+        # ... more messages
+    ],
+    "tools": [...]  # Tool schemas (~2000 tokens)
+}
+```
+
+**Tool messages can be HUGE!**
+```python
+# Example: Textract extraction result
+ToolMessage(content=json.dumps({
+    "extracted_text": "3000 words of text...",  # ~12,000 characters = ~3,000 tokens
+    "extracted_tables": [...],                   # ~5,000 tokens
+    "extracted_images": ["s3://..."] * 50        # ~500 tokens
+}))
+# Total: ~8,500 tokens for ONE tool result!
+```
+
+---
+
+### **Token Math Example**
+
+**Inspection report analysis flow:**
+
+```python
+# Message 1: User task (100 tokens)
+HumanMessage("Analyze report.pdf...")
+
+# Message 2-3: Tool #1 (extract_inspection_report)
+AIMessage("I'll extract first")                    # ~50 tokens
+ToolMessage(extracted_text=3000 words)             # ~8,000 tokens
+
+# Message 4-5: Tool #2 (extract_ratings_variables)
+AIMessage("I'll extract ratings")                  # ~50 tokens
+ToolMessage(reported_ratings + inspector_ratings)  # ~2,000 tokens
+
+# Message 6-7: Tool #3 (compare_and_verify_ratings)
+AIMessage("I'll compare")                          # ~50 tokens
+ToolMessage(comparison_results)                    # ~3,000 tokens
+
+# Message 8: Final analysis
+AIMessage("COMPREHENSIVE ANALYSIS...")             # ~1,500 tokens
+
+# Total conversation: ~14,750 tokens
+# Plus system prompt: ~500 tokens
+# Plus tool schemas: ~2,000 tokens
+# GRAND TOTAL: ~17,250 tokens per Claude invocation
+```
+
+**This fits easily in 200K limit!** ✅
+
+**But if you had:**
+- 50-page PDF with 50,000 words (~125,000 tokens)
+- Would exceed context window! ❌
+
+---
+
+### **How Your Code Manages State Size**
+
+**Strategy 1: Store S3 URIs, Not Image Data**
+
+**File:** textract_tool.py Line 37
+
+```python
+# Upload images to S3 and return URIs
+extracted_images = extract_images_from_pdf(
+    pdf_path,
+    settings.s3_bucket_name,
+    s3_image_prefix
+)
+# Returns: ["s3://bucket/img1.jpg", "s3://bucket/img2.jpg"]
+# NOT the actual image bytes!
+
+return {
+    "extracted_images": extracted_images  # Just strings, not binary data!
+}
+```
+
+**Savings:**
+- Image bytes: ~500KB per image = 500,000 bytes
+- S3 URI: ~50 bytes
+- **Savings: 99.99% reduction!**
+
+---
+
+**Strategy 2: Tools Return Structured Data, Not Raw Responses**
+
+```python
+# Bad: Return entire AWS response (huge!)
+return {
+    "raw_textract_response": response  # ~1MB of JSON
+}
+
+# Good: Extract only what's needed
+return {
+    "extracted_text": extracted_text,     # ~50KB
+    "extracted_tables": extracted_tables,  # ~20KB
+    "extracted_images": image_uris         # ~1KB
+    # Total: ~71KB instead of 1MB!
+}
+```
+
+---
+
+**Strategy 3: Don't Store Tool Results in State**
+
+**File:** analysis.py Line 139-144
+
+```python
+return {
+    **state,
+    "messages": state.get("messages", []) + result.get("messages", []),
+    "final_analysis": final_analysis,  # ← Only store final summary, not all tool results!
+    "next_agent": None
+}
+```
+
+**Tool results are in `messages`**, but you could filter them out:
+
+```python
+# If state gets too big, you could do:
+final_messages = [msg for msg in result["messages"] if isinstance(msg, AIMessage)]
+# Only keep AI responses, discard tool results
+
+return {
+    **state,
+    "messages": state.get("messages", []) + final_messages,  # Smaller!
+    "final_analysis": final_analysis
+}
+```
+
+---
+
+### **Practical State Capacity**
+
+**Best case (efficient):**
+- PDF: 10 pages, 5000 words
+- State size: ~500KB
+- Token count: ~15,000 tokens
+- **Easily fits!** ✅
+
+**Worst case (inefficient):**
+- PDF: 100 pages, 50,000 words
+- Storing full text in state
+- State size: ~5MB
+- Token count: ~125,000 tokens
+- **Still fits in 200K limit** ✅ but getting close
+
+**Breaking point:**
+- PDF: 500 pages, 250,000 words
+- Token count: ~625,000 tokens
+- **Exceeds 200K limit!** ❌
+
+---
+
+### **How to Handle Large Documents**
+
+**Option 1: Chunking**
+```python
+# Split large PDF into chunks
+chunks = split_pdf_into_chunks(pdf_path, chunk_size=20_pages)
+
+for chunk in chunks:
+    result = analyze_chunk(chunk)
+    chunk_results.append(result)
+
+# Combine results
+final_result = combine_chunk_results(chunk_results)
+```
+
+**Option 2: Summarization**
+```python
+# Extract full text
+full_text = extract_text(pdf_path)  # 50,000 words
+
+# Summarize before analysis
+summary = summarize_text(full_text)  # 5,000 words
+
+# Analyze summary instead
+result = analyze_summary(summary)
+```
+
+**Option 3: Selective Extraction**
+```python
+# Instead of extracting all text
+# Extract only relevant sections
+relevant_sections = extract_specific_sections(
+    pdf_path,
+    sections=["Property Details", "Inspector Findings", "Discrepancies"]
+)
+# Much smaller!
+```
+
+---
+
+## **Memory Usage Summary**
+
+| Component | Typical Size | Token Count | Notes |
+|-----------|-------------|-------------|-------|
+| **State dict** | 100KB - 2MB | N/A | Python memory |
+| **Single message** | 1KB - 100KB | 250 - 25K | Part of state |
+| **All messages** | 50KB - 500KB | 12K - 125K | Sent to Claude |
+| **System prompt** | 2KB | 500 | Fixed overhead |
+| **Tool schemas** | 8KB | 2,000 | Fixed overhead |
+| **Total per invocation** | ~60KB - 510KB | ~15K - 128K | Must fit in 200K |
+
+**Your current implementation: Well-optimized!** ✅
+
+- Uses S3 URIs (not binary data)
+- Extracts structured data (not raw API responses)
+- Stays well under 200K token limit for typical use cases
+
+---
+
+## **Summary Answers**
+
+**1. LangChain = Middleware?**
+✅ YES! Like Lambda handler for Bedrock Agents, LangChain bridges Claude and Python functions.
+
+**2. How Claude knows when done + error handling?**
+- Claude knows it's done when it responds WITHOUT tool_use
+- Errors: Tools return error status → LangChain sends to Claude → Claude adapts/reports
+- Multi-layer error handling: Tool → Agent → Node → Workflow
+
+**3. Prompt design?**
+- Router: System prompt (role + rules) + Dynamic user prompt (current state)
+- Analysis: System prompt (role + workflow + tools) + User task
+- Clear instructions, explicit workflows, output constraints
+
+**4. Output formats?**
+- Tool → Dict (Python)
+- Agent → List of Messages (LangChain objects)
+- Node → State dict (InspectionState)
+- Workflow → Final state dict
+- User sees → Formatted text
+
+**5. State capacity?**
+- Python memory: 1-2GB practical limit
+- **Real limit: Claude's 200K token context window**
+- Typical usage: ~15K tokens (well under limit)
+- Your code optimized: S3 URIs, structured data, filtered messages
+
+🎉 Your system is efficiently designed for typical inspection reports up to ~50 pages!
